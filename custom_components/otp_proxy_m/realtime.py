@@ -87,8 +87,8 @@ def build_headers(origin: str = ORIGIN_HEADER) -> dict[str, str]:
     return {"origin": origin, "Accept": "application/json"}
 
 
-def _patch_one_stop(stop: dict[str, Any], live: LiveTimes) -> dict[str, Any]:
-    """Patch stoptimes of a single (merged) stop object."""
+def _patch_one_stop(stop: dict[str, Any], live: dict[tuple[int, str], dict[str, Any]]) -> dict[str, Any]:
+    """Patch stoptimes of a single stop object (may not expose gtfsId)."""
     stms = stop.get("stoptimesWithoutPatterns")
     if not isinstance(stms, list):
         return stop
@@ -98,7 +98,7 @@ def _patch_one_stop(stop: dict[str, Any], live: LiveTimes) -> dict[str, Any]:
             out.append(stm)
             continue
         trip = stm.get("trip") or {}
-        row = live.by_trip.get(
+        row = live.get(
             (int(stm.get("serviceDay", 0)), str(trip.get("gtfsId", "")))
         )
         if row is None:
@@ -120,21 +120,25 @@ def _patch_one_stop(stop: dict[str, Any], live: LiveTimes) -> dict[str, Any]:
     return stop
 
 
-def patch_data(data: dict[str, Any], live_by_stop: dict[str, LiveTimes]) -> dict[str, Any]:
+def patch_data(
+    data: dict[str, Any], live_by_stop: dict[str, dict[tuple[int, str], dict[str, Any]]]
+) -> dict[str, Any]:
     """Patch a GraphQL ``data`` dict (returns a patched copy).
 
-    Handles both shapes:
-    - raw upstream: ``{"stops": [...]}`` and the aliased ``{"stop": [...]}``,
-    - already-reshaped: ``{"stop": {...}}`` (object).
-    Unknown/gone stops are left untouched.
+    Matches stoptime rows individually on ``(serviceDay, trip.gtfsId)``:
+    stop objects returned by the query often do NOT expose ``gtfsId``
+    (openpublictransport's query does not request it), so matching cannot
+    rely on the stop id — every ``(serviceDay, tripId)`` index from every
+    fetched stop is pooled together.
     """
     patched = dict(data)
+    pooled: dict[tuple[int, str], dict[str, Any]] = {}
+    for rows in live_by_stop.values():
+        pooled.update(rows)
 
     def patch_stop(s: Any) -> Any:
-        if isinstance(s, dict):
-            live = live_by_stop.get(s.get("gtfsId", ""))
-            if live is not None:
-                return _patch_one_stop(s, live)
+        if isinstance(s, dict) and isinstance(s.get("stoptimesWithoutPatterns"), list):
+            return _patch_one_stop(s, pooled)
         return s
 
     stop_alias = data.get("stop")

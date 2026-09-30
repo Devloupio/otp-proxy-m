@@ -236,21 +236,19 @@ class OtpProxyView(HomeAssistantView):
             *(realmod.fetch_live_times(session, sid) for sid in stop_ids),
             return_exceptions=True,
         )
-        live_by_stop = {
-            sid: live
-            for sid, live in zip(stop_ids, results)
-            if isinstance(live, realmod.LiveTimes) and live.by_trip
-        }
-        if not live_by_stop:
+        live_rows: dict[str, dict[tuple[int, str], dict[str, Any]]] = {}
+        for sid, live in zip(stop_ids, results):
+            if isinstance(live, realmod.LiveTimes) and bool(live):
+                live_rows[sid] = live.by_trip
+        if not live_rows:
             _LOGGER.debug("otp_proxy_m realtime: no live data for %s", stop_ids)
             return self._reshaped(raw), False
-        patched_data = realmod.patch_data(data, live_by_stop)
-        decoded["data"] = patched_data
+        patched_data = realmod.patch_data(data, live_rows)
         patched_data = reshape_response(patched_data)
         decoded["data"] = patched_data
         _LOGGER.debug(
             "otp_proxy_m realtime: enriched %s stops for %s",
-            len(live_by_stop),
+            len(live_rows),
             ", ".join(stop_ids),
         )
         return json.dumps(decoded, separators=(",", ":")).encode(), True

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import pathlib
 import sys
 
@@ -108,7 +107,7 @@ LIVE = LiveTimes.parse(
 
 def test_patch_list_shape():
     out = patch_data(
-        {"stops": GRAPHQL_DATA["stop"]}, {"SEM:0501": LIVE}
+        {"stops": GRAPHQL_DATA["stop"]}, {"SEM:0501": LIVE.by_trip}
     )
     stm = out["stops"][0]["stoptimesWithoutPatterns"][0]
     assert stm["realtime"] is True
@@ -123,7 +122,7 @@ def test_patch_list_shape():
 def test_patch_object_shape():
     obj = dict(GRAPHQL_DATA)
     obj["stop"] = GRAPHQL_DATA["stop"][0]
-    out = patch_data(obj, {"SEM:0501": LIVE})
+    out = patch_data(obj, {"SEM:0501": LIVE.by_trip})
     stm = out["stop"]["stoptimesWithoutPatterns"][0]
     assert stm["realtime"] is True and stm["departureDelay"] == 27
 
@@ -134,9 +133,45 @@ def test_patch_no_live_no_change():
 
 
 def test_patch_unknown_stop():
-    out = patch_data(GRAPHQL_DATA, {"OTHER:1": LIVE})
-    out_json = json.dumps(out)
-    assert '"realtime": true' not in out_json
+    # pooled index: any (serviceDay, tripId) match enriches, whatever the
+    # dict key was — matching is per-stoptime, not per-stop.
+    out = patch_data(GRAPHQL_DATA, {"OTHER:1": LIVE.by_trip})
+    stm = out["stop"][0]["stoptimesWithoutPatterns"][0]
+    assert stm["realtime"] is True
+
+
+def test_patch_stop_without_gtfsid():
+    # openpublictransport queries do not request stop.gtfsId: matching must
+    # still work (pooled (serviceDay, tripId) index).
+    no_id = dict(GRAPHQL_DATA["stop"][0])
+    no_id.pop("gtfsId")
+    out = patch_data({"stop": [no_id]}, {"SEM:0501": LIVE.by_trip})
+    stm = out["stop"][0]["stoptimesWithoutPatterns"][0]
+    assert stm["realtime"] is True and stm["departureDelay"] == 27
+
+
+def test_patch_multi_stop_pooling():
+    stop_b = {
+        "name": "Other",
+        "stoptimesWithoutPatterns": [
+            {
+                "serviceDay": 1790719200,
+                "realtime": False,
+                "trip": {"gtfsId": "SEM:0502TRIP"},
+            }
+        ],
+    }
+    live_other = LiveTimes.parse(
+        [{"times": [{"tripId": "SEM:0502TRIP", "serviceDay": 1790719200,
+                     "realtime": True, "realtimeDeparture": 9999,
+                     "departureDelay": 12, "occupancy": "High"}]}]
+    )
+    out = patch_data(
+        {"stops": [*GRAPHQL_DATA["stop"], stop_b]},
+        {"SEM:0501": LIVE.by_trip, "SEM:0502": live_other.by_trip},
+    )
+    assert out["stops"][0]["stoptimesWithoutPatterns"][0]["departureDelay"] == 27
+    assert out["stops"][1]["stoptimesWithoutPatterns"][0]["departureDelay"] == 12
 
 
 def test_early_delay_negative_preserved():
@@ -156,7 +191,7 @@ def test_early_delay_negative_preserved():
             }
         ]
     )
-    out = patch_data(GRAPHQL_DATA, {"SEM:0501": live_early})
+    out = patch_data(GRAPHQL_DATA, {"SEM:0501": live_early.by_trip})
     stm = out["stop"][0]["stoptimesWithoutPatterns"][0]
     assert stm["departureDelay"] == -53
     assert stm["realtimeDeparture"] == 54200
