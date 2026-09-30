@@ -20,6 +20,7 @@ from aiohttp import ClientError, web
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant
 
+from . import realtime as realmod
 from .const import DOMAIN, GRAPHQL_PATH, INDEX_PATH, REQUEST_TIMEOUT
 from .rewrite import RewriteError, reshape_response, rewrite_payload
 
@@ -45,9 +46,11 @@ class ProxyStats:
     rewrites_total: int = 0
     errors_total: int = 0
     upstream_403_total: int = 0
+    realtime_enriched_total: int = 0
     last_error: str | None = None
     last_request_at: float | None = None
     last_success_at: float | None = None
+    last_enriched_at: float | None = None
 
 
 @dataclass
@@ -144,6 +147,7 @@ class OtpProxyView(HomeAssistantView):
             data=json.dumps(payload or {}).encode(),
             content_type="application/json",
             rewritten=rewritten,
+            query=(payload or {}).get("query", ""),
         )
 
     async def _forward(
@@ -154,6 +158,7 @@ class OtpProxyView(HomeAssistantView):
         data: bytes | None = None,
         content_type: str | None = None,
         rewritten: bool = False,
+        query: str = "",
     ) -> web.Response:
         stats = runtime.stats
         url = f"{runtime.upstream_base}{path}"
@@ -189,13 +194,66 @@ class OtpProxyView(HomeAssistantView):
 
         content = raw
         ctype = resp.headers.get("Content-Type", "application/octet-stream")
+        enhanced = False
         if rewritten and "json" in ctype:
-            content = self._reshaped(raw)
+            content, enhanced = await self._enriched(runtime, raw, query)
+            if not enhanced:
+                content = self._reshaped(raw)
+        if enhanced:
+            stats.realtime_enriched_total += 1
+            stats.last_enriched_at = time.time()
 
         if resp.status == HTTPStatus.OK:
             stats.last_success_at = time.time()
 
         return web.Response(body=content, status=resp.status, content_type=ctype)
+
+    async def _enriched(
+        self, runtime: ProxyRuntime, raw: bytes, query: str
+    ) -> tuple[bytes, bool]:
+        """Patch stoptimes with live REST data when the query fetches them.
+
+        Returns (body, enriched). Any failure falls back to the unpatched
+        reshaped body so departures never break because of enrichment.
+        """
+        if not realmod.is_enrichable(query):
+            return raw, False
+        stop_ids = realmod.extract_stop_ids(query)
+        if not stop_ids:
+            return raw, False
+        try:
+            decoded = json.loads(raw)
+        except (ValueError, TypeError):
+            return raw, False
+        data = decoded.get("data") if isinstance(decoded, dict) else None
+        if not isinstance(data, dict):
+            return raw, False
+
+        # find session: proxy runtimes share the HA clientsession
+        session = runtime.session
+        stop_ids = list(stop_ids)[:10]
+        results = await asyncio.gather(
+            *(realmod.fetch_live_times(session, sid) for sid in stop_ids),
+            return_exceptions=True,
+        )
+        live_by_stop = {
+            sid: live
+            for sid, live in zip(stop_ids, results)
+            if isinstance(live, realmod.LiveTimes) and live.by_trip
+        }
+        if not live_by_stop:
+            _LOGGER.debug("otp_proxy_m realtime: no live data for %s", stop_ids)
+            return self._reshaped(raw), False
+        patched_data = realmod.patch_data(data, live_by_stop)
+        decoded["data"] = patched_data
+        patched_data = reshape_response(patched_data)
+        decoded["data"] = patched_data
+        _LOGGER.debug(
+            "otp_proxy_m realtime: enriched %s stops for %s",
+            len(live_by_stop),
+            ", ".join(stop_ids),
+        )
+        return json.dumps(decoded, separators=(",", ":")).encode(), True
 
     @staticmethod
     def _reshaped(raw: bytes) -> bytes:

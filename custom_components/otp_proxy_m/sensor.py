@@ -63,11 +63,13 @@ class OtpProxyStatusSensor(SensorEntity):
             "upstream": self._runtime.upstream_base,
             "requests_total": stats.requests_total,
             "rewrites_total": stats.rewrites_total,
+            "realtime_enriched_total": stats.realtime_enriched_total,
             "errors_total": stats.errors_total,
             "upstream_403_total": stats.upstream_403_total,
             "last_error": stats.last_error,
             "last_request_at": self._iso(stats.last_request_at),
             "last_success_at": self._iso(stats.last_success_at),
+            "last_enriched_at": self._iso(stats.last_enriched_at),
         }
 
     @staticmethod
