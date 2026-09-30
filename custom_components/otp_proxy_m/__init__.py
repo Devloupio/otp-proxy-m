@@ -10,6 +10,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import CONF_UPSTREAM, DEFAULT_UPSTREAM, DOMAIN
 from .http import ProxyRuntime, get_or_create_view
@@ -23,7 +24,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Register the proxy route for this entry."""
     store = hass.data.setdefault(DOMAIN, {})
     view = get_or_create_view(hass)
-    session = hass.helpers.aiohttp_client.async_get_clientsession()
+    session = async_get_clientsession(hass)
 
     key = entry.data.get("route_key") or entry.entry_id
     runtime = ProxyRuntime(session=session, upstream=entry.data.get(CONF_UPSTREAM, DEFAULT_UPSTREAM))
