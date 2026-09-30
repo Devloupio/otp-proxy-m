@@ -9,6 +9,7 @@ Also repairs openpublictransport trip entries missing otp_base_url
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -78,11 +79,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     view.register_runtime(key, runtime)
     store[entry.entry_id] = {"view": view, "runtime": runtime}
 
-    # repair trip entries once the proxy route exists
+    # repair trip entries created while the route was not yet available; and
+    # keep watching after HA start (entries created around boot time).
     await _repair_trip_entries(hass)
+    _register_boot_repairs(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
     return True
+
+
+def _register_boot_repairs(hass: HomeAssistant) -> None:
+    """Register a one-shot listener firing after HA is fully started.
+
+    The proxy is set up early; openpublictransport trip entries can be
+    created right after (or exist already). Scan now + at 30/90/240 s
+    after startup to catch late setups without running forever.
+    """
+
+    async def _started(_event: Any) -> None:
+        await _repair_trip_entries(hass)
+        for delay in (30, 90, 240):
+            hass.async_call_later(
+                delay,
+                lambda _t, d=delay: _periodic_scan(hass, d),
+                "otp_proxy_m_repair_scan",
+            )
+
+    hass.bus.async_listen_once("homeassistant_started", _started)
+
+
+async def _periodic_scan(hass: HomeAssistant, _delay: int = 0) -> None:
+    repaired = await _repair_trip_entries(hass)
+    if repaired:
+        _LOGGER.info(
+            "otp_proxy_m: repaired %s trip entries", len(repaired)
+        )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
