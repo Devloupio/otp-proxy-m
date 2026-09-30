@@ -195,3 +195,56 @@ def test_early_delay_negative_preserved():
     stm = out["stop"][0]["stoptimesWithoutPatterns"][0]
     assert stm["departureDelay"] == -53
     assert stm["realtimeDeparture"] == 54200
+
+
+def test_inject_trip_gtfs_id():
+    from otp_proxy_m_realtime import inject_trip_gtfs_id
+    q = '{ stop: stops(ids: ["SEM:0501"]) { stoptimesWithoutPatterns { realtime trip { route { shortName } } } } }'
+    out = inject_trip_gtfs_id(q)
+    assert "trip { gtfsId" in out
+    # idempotent
+    assert inject_trip_gtfs_id(out) == out
+    q2 = '{ ... trip { gtfsId shortName } }'
+    assert inject_trip_gtfs_id(q2) == q2
+
+
+def test_extract_stop_ids_composite():
+    q = '{ stops(ids: ["SEM:0501|SEM:0502"]) { name } }'
+    assert extract_stop_ids(q) == ["SEM:0501", "SEM:0502"]
+
+
+def test_fallback_match_on_scheduled():
+    # no trip info at all in the GraphQL row -> fallback on scheduledDeparture
+    gql = {"stop": [{"stoptimesWithoutPatterns": [
+        {"serviceDay": 1790719200, "scheduledDeparture": 54792, "realtime": False}
+    ]}]}
+    rest = LiveTimes.parse([{"times": [{"tripId": "T9", "serviceDay": 1790719200,
+                                        "scheduledDeparture": 54792, "realtime": True,
+                                        "realtimeDeparture": 54920, "departureDelay": 128,
+                                        "occupancy": "Faible"}]}])
+    out = patch_data(gql, {"SEM:0501": rest.by_trip})
+    stm = out["stop"][0]["stoptimesWithoutPatterns"][0]
+    assert stm["realtime"] is True and stm["departureDelay"] == 128
+
+
+def test_fallback_close_scheduled():
+    # scheduled drift of 1s (REST 54791 vs GraphQL 54792) still matches
+    gql = {"stop": [{"stoptimesWithoutPatterns": [
+        {"serviceDay": 1790719200, "scheduledDeparture": 54793, "realtime": False}
+    ]}]}
+    rest = LiveTimes.parse([{"times": [{"tripId": "T1", "serviceDay": 1790719200,
+                                        "scheduledDeparture": 54792, "realtime": True,
+                                        "realtimeDeparture": 54920, "departureDelay": 128}]}])
+    out = patch_data(gql, {"s": rest.by_trip})
+    assert out["stop"][0]["stoptimesWithoutPatterns"][0]["departureDelay"] == 128
+
+
+def test_fallback_far_scheduled_not_matched():
+    gql = {"stop": [{"stoptimesWithoutPatterns": [
+        {"serviceDay": 1790719200, "scheduledDeparture": 54800, "realtime": False}
+    ]}]}
+    rest = LiveTimes.parse([{"times": [{"tripId": "T1", "serviceDay": 1790719200,
+                                        "scheduledDeparture": 54792, "realtime": True,
+                                        "departureDelay": 128}]}])
+    out = patch_data(gql, {"s": rest.by_trip})
+    assert out["stop"][0]["stoptimesWithoutPatterns"][0]["realtime"] is False

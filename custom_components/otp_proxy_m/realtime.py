@@ -34,6 +34,20 @@ _REST_TIMEOUT = 12
 
 _STOPTIMES_Q = re.compile(r"\bstoptimesWithoutPatterns\b")
 _STOPS_IDS_Q = re.compile(r"stops\s*\(\s*ids\s*:\s*\[([^\]]*)\]")
+_TRIP_BLOCK = re.compile(r"\btrip\s*\{(?![^}]*\bgtfsId\b)", re.IGNORECASE)
+
+# Fallback matching tolerance in seconds (OTP1/OTP2 static import drift ~1s).
+_SCHED_TOLERANCE = 2
+
+
+def inject_trip_gtfs_id(query: str) -> str:
+    """Add ``gtfsId`` to every ``trip {`` block of an enrichable query.
+
+    The matching key is ``trip.gtfsId`` == REST ``tripId``; clients like
+    openpublictransport do not request it, so the response cannot be matched
+    without it. Idempotent (skips blocks already containing gtfsId).
+    """
+    return _TRIP_BLOCK.sub("trip { gtfsId ", query)
 
 
 def is_enrichable(query: str) -> bool:
@@ -42,10 +56,14 @@ def is_enrichable(query: str) -> bool:
 
 
 def extract_stop_ids(query: str) -> list[str]:
-    """Extract every stop id from ``stops(ids: ["A", "B"])`` in the query."""
+    """Extract every stop id from ``stops(ids: ["A", "B"])`` in the query.
+
+    Ids composés (``"SEM:0501|SEM:0502"``) are split into single ids.
+    """
     ids: list[str] = []
     for m in _STOPS_IDS_Q.finditer(query):
-        ids.extend(re.findall(r'"([^"]+)"', m.group(1)))
+        for raw in re.findall(r'"([^"]+)"', m.group(1)):
+            ids.extend(p for p in raw.split("|") if p)
     seen: set[str] = set()
     return [i for i in ids if not (i in seen or seen.add(i))]
 
@@ -87,7 +105,40 @@ def build_headers(origin: str = ORIGIN_HEADER) -> dict[str, str]:
     return {"origin": origin, "Accept": "application/json"}
 
 
-def _patch_one_stop(stop: dict[str, Any], live: dict[tuple[int, str], dict[str, Any]]) -> dict[str, Any]:
+def _find_row(
+    live: dict[tuple[int, str], dict[str, Any]],
+    service_day: int,
+    trip_id: str,
+    scheduled: Any,
+) -> dict[str, Any] | None:
+    """Match a REST row for a stoptime.
+
+    Primary key: (serviceDay, tripId) — byte-identical both sides.
+    Fallback: scheduledDeparture within +-2 s on the same serviceDay
+    (OTP1/OTP2 static feeds drift by ~1 s), tripId unknown/not requested.
+    """
+    row = live.get((service_day, trip_id))
+    if row is not None:
+        return row
+    if scheduled is None:
+        return None
+    try:
+        sched = int(scheduled)
+    except (TypeError, ValueError):
+        return None
+    best: tuple[int, dict[str, Any]] | None = None
+    for (day, _trip), cand in live.items():
+        if day != service_day or cand.get("realtime") is not True:
+            continue
+        delta = abs(int(cand.get("scheduledDeparture", -10**9)) - sched)
+        if delta <= _SCHED_TOLERANCE and (best is None or delta < best[0]):
+            best = (delta, cand)
+    return best[1] if best else None
+
+
+def _patch_one_stop(
+    stop: dict[str, Any], live: dict[tuple[int, str], dict[str, Any]]
+) -> dict[str, Any]:
     """Patch stoptimes of a single stop object (may not expose gtfsId)."""
     stms = stop.get("stoptimesWithoutPatterns")
     if not isinstance(stms, list):
@@ -98,8 +149,11 @@ def _patch_one_stop(stop: dict[str, Any], live: dict[tuple[int, str], dict[str, 
             out.append(stm)
             continue
         trip = stm.get("trip") or {}
-        row = live.get(
-            (int(stm.get("serviceDay", 0)), str(trip.get("gtfsId", "")))
+        row = _find_row(
+            live,
+            int(stm.get("serviceDay", 0)),
+            str(trip.get("gtfsId", "")),
+            stm.get("scheduledDeparture"),
         )
         if row is None:
             out.append(stm)

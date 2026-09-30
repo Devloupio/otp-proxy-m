@@ -140,6 +140,10 @@ class OtpProxyView(HomeAssistantView):
 
         if rewritten:
             stats.rewrites_total += 1
+            query = payload["query"]
+            if realmod.is_enrichable(query):
+                query = realmod.inject_trip_gtfs_id(query)
+                payload["query"] = query
         return await self._forward(
             request,
             runtime,
