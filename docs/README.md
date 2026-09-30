@@ -4,6 +4,7 @@
 - [api](api.md) — endpoints du proxy, formats, erreurs, API upstream
 - [installation](installation.md) — HACS / manuel, configuration pas à pas
 - [waf](waf.md) — analyse complète de la règle de blocage mobilites-m et des contournements
+- [live-api](live-api.md) — sources temps réel du réseau M et mécanisme d'enrichissement
 
 ## Références externes
 

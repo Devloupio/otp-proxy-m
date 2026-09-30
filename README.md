@@ -78,6 +78,12 @@ Puis redémarrer HA.
 - Modes `CABLE_CAR` (Bulles / Téléphérique) possiblement non mappés par openpublictransport.
 - Requêtes GraphQL `stop(id: $variable)` **non supportées** par le réécriteur (clairement rejetées en 400, jamais transmises).
 
+## Temps réel (v1.1.0+)
+
+Le proxy **enrichit automatiquement les départs** avec les données live de l'API REST legacy (`data.mobilites-m.fr`, header `origin` requis) : `realtime`, `retard` (minutes dans les attributs HA), `realtimeState`, `occupancy`. Mécanisme : fetch REST des stops de la query, matching `trip { gtfsId }` (injecté automatiquement) == REST `tripId`, fallback `scheduledDeparture` ±2 s.
+
+Les **itinéraires** (Trip Planner) restent théoriques : le planner legacy ne renvoie pas de realtime exploitable.
+
 ## Dépannage
 
 - Activer les logs debug : `configuration.yaml` →
