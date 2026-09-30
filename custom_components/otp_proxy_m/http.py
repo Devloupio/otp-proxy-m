@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -28,6 +29,12 @@ GRAPHQL_CONTENT_TYPE = "application/graphql"
 
 # Headers forwarded to the upstream OTP2 server.
 FORWARD_HEADERS = ("accept", "x-api-key", "user-agent")
+
+# The client-facing URL contains the router path (otp/routers/<name>) because
+# openpublictransport appends it to the configured base URL. The upstream base
+# already ends with the same router path, so the prefix must be stripped:
+#   {tail} = otp/routers/default/index/graphql -> remainder = index/graphql
+_ROUTER_PREFIX = re.compile(r"^otp/routers/[^/?#]+/?", re.IGNORECASE)
 
 
 @dataclass
@@ -88,8 +95,9 @@ class OtpProxyView(HomeAssistantView):
         stats.requests_total += 1
         stats.last_request_at = time.time()
 
-        path = f"/{tail}" if tail else ""
-        if path == INDEX_PATH and request.method == "GET":
+        remainder = _ROUTER_PREFIX.sub("", tail)
+        path = f"/{remainder}" if remainder else ""
+        if remainder == INDEX_PATH.lstrip("/") and request.method == "GET":
             # Emulated index endpoint: the public server answers 404 here but
             # the openpublictransport config flow health-checks this path.
             stats.last_success_at = time.time()
