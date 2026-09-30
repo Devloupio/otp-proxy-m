@@ -1,0 +1,29 @@
+{
+  "strings": {
+    "config": {
+      "abort": {
+        "already_configured": "[%key:common::config_flow::abort::already_configured%]"
+      },
+      "step": {
+        "user": {
+          "title": "OTP Proxy M",
+          "description": "Configure the OTP proxy for the M network (mobilites-m.fr)",
+          "data": {
+            "name": "Name",
+            "upstream": "Upstream OTP2 URL (routers)",
+            "route_key": "Route key (used in the proxy URL)"
+          }
+        }
+      }
+    },
+    "options": {
+      "step": {
+        "init": {
+          "data": {
+            "upstream": "Upstream OTP2 URL (routers)"
+          }
+        }
+      }
+    }
+  }
+}

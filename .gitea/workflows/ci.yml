@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install test deps
+        run: pip install -q pytest pytest-asyncio ruff
+      - name: Ruff
+        run: ruff check custom_components/otp_proxy_m
+      - name: Pytest
+        run: python3 -m pytest tests/ -q
+
+  validate-hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: HACS action validation
+        uses: hacs/action@main
+        with:
+          category: integration
+      - name: Hassfest validation
+        uses: home-assistant/actions/hassfest@master
